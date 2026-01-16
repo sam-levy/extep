@@ -40,8 +40,9 @@ defmodule Extep do
             when is_struct(extep, __MODULE__) and extep.status in [:halted, :error]
 
   @type context_key :: atom()
-  @type context_checker_fun :: (context() ->
-                                  :ok | {:ok, any()} | {:halt, any()} | {:error, any()})
+  @type context_checker_fun ::
+          (context() ->
+             :ok | {:ok, any()} | {:halt, any()} | {:error, any()})
   @type context_mutator_fun :: (context() -> {:ok, any()} | {:halt, any()} | {:error, any()})
 
   defguardp is_ctx_fun(fun) when is_function(fun, 1)
@@ -540,19 +541,72 @@ defmodule Extep do
       ...> |> Extep.return(:bar)
       {:ok, "halt message"}
   """
-  @spec return(t(), context_mutator_fun() | context_key(), opts()) :: any()
-  def return(extep, fun_or_key, opts \\ [])
+  @spec return(t(), context_mutator_fun() | context_key(), opts()) :: {:ok | :error, any()}
+  def return(extep, fun_or_key, opts \\ []) do
+    {status, {value, _context}} = return_with_context(extep, fun_or_key, opts)
 
-  def return(%{tasks: [_ | _]} = extep, fun, opts) when is_ok(extep) and is_ctx_fun(fun) do
-    extep
-    |> await()
-    |> return(fun, opts)
+    {status, value}
   end
 
-  def return(extep, fun, opts) when is_ok(extep) and is_ctx_fun(fun) do
+  @doc """
+  Returns a final result from your pipeline along with the context.
+
+  This function works exactly like `return/3`, but returns the result as a tuple containing
+  both the value and the context: `{status, {value, context}}`.
+
+  This is useful when you need to inspect or use the pipeline context after extraction,
+  particularly for debugging or when the context contains additional data needed by the caller.
+
+  ## Parameters
+
+  - `extep` - The Extep struct containing your pipeline state
+  - `fun_or_key` - Either a function `(context -> result)` or an atom key to extract from context
+  - `opts` - Keyword list of options (defaults to `[]`)
+
+  ## Options
+
+  - `label_error` (boolean, default: `false`):
+    - When `false`: Returns clean error messages like `{:error, {"message", context}}`
+    - When `true`: Returns labeled errors like `{:error, {%{step_name: "message"}, context}}`
+
+  ## Examples
+
+  ### Successful Pipeline with Context
+
+      iex> Extep.new(%{foo: 1})
+      ...> |> Extep.run(:bar, fn ctx -> {:ok, ctx.foo + 1} end)
+      ...> |> Extep.return_with_context(:bar)
+      {:ok, {2, %{foo: 1, bar: 2}}}
+
+  ### Error Pipeline with Context
+
+      iex> Extep.new(%{foo: 1})
+      ...> |> Extep.run(:bar, fn _ctx -> {:error, "error message"} end)
+      ...> |> Extep.return_with_context(:foo)
+      {:error, {"error message", %{foo: 1}}}
+
+  ### Halted Pipeline with Non-Tuple Message
+
+      iex> Extep.new(%{foo: 1})
+      ...> |> Extep.run(:bar, fn _ctx -> {:halt, "halt message"} end)
+      ...> |> Extep.return_with_context(:bar)
+      {:no_status, {"halt message", %{foo: 1}}}
+  """
+  @spec return_with_context(t(), context_mutator_fun() | context_key(), opts()) ::
+          {:ok | :error | atom(), {any(), context()}}
+  def return_with_context(extep, fun_or_key, opts \\ [])
+
+  def return_with_context(%{tasks: [_ | _]} = extep, fun, opts)
+      when is_ok(extep) and is_ctx_fun(fun) do
+    extep
+    |> await()
+    |> return_with_context(fun, opts)
+  end
+
+  def return_with_context(extep, fun, opts) when is_ok(extep) and is_ctx_fun(fun) do
     case apply(fun, [extep.context]) do
-      {:ok, _} = return ->
-        return
+      {:ok, value} ->
+        {:ok, {value, extep.context}}
 
       return ->
         extep
@@ -561,23 +615,24 @@ defmodule Extep do
     end
   end
 
-  def return(extep, fun, opts) when is_interrupted(extep) and is_ctx_fun(fun) do
+  def return_with_context(extep, fun, opts) when is_interrupted(extep) and is_ctx_fun(fun) do
     extep
     |> shutdown_tasks()
     |> return_interrupted(opts)
   end
 
-  def return(%{tasks: [_ | _]} = extep, ctx_key, opts) when is_ok(extep) and is_atom(ctx_key) do
+  def return_with_context(%{tasks: [_ | _]} = extep, ctx_key, opts)
+      when is_ok(extep) and is_atom(ctx_key) do
     extep
     |> await()
-    |> return(ctx_key, opts)
+    |> return_with_context(ctx_key, opts)
   end
 
-  def return(extep, ctx_key, _opts) when is_ok(extep) and is_atom(ctx_key) do
-    {:ok, Map.fetch!(extep.context, ctx_key)}
+  def return_with_context(extep, ctx_key, _opts) when is_ok(extep) and is_atom(ctx_key) do
+    {:ok, {Map.fetch!(extep.context, ctx_key), extep.context}}
   end
 
-  def return(extep, ctx_key, opts) when is_interrupted(extep) and is_atom(ctx_key) do
+  def return_with_context(extep, ctx_key, opts) when is_interrupted(extep) and is_atom(ctx_key) do
     extep
     |> shutdown_tasks()
     |> return_interrupted(opts)
@@ -593,23 +648,31 @@ defmodule Extep do
     %{extep | status: :error, message: Map.new([{message_key, message}])}
   end
 
-  defp return_interrupted(%Extep{status: :halted, message: message}, _opts), do: message
+  defp return_interrupted(%Extep{status: :halted, message: {status, message}} = extep, _opts) do
+    {status, {message, extep.context}}
+  end
 
-  defp return_interrupted(%Extep{status: :error, message: message}, opts) do
+  defp return_interrupted(%Extep{status: :halted, message: message} = extep, _opts) do
+    {:no_status, {message, extep.context}}
+  end
+
+  defp return_interrupted(%Extep{status: :error} = extep, opts) do
     case Keyword.get(opts, :label_error, false) do
-      true -> {:error, message}
-      false -> extract_error_message(message)
+      true -> {:error, {extep.message, extep.context}}
+      false -> extract_error_message(extep)
     end
   end
 
-  defp extract_error_message(message) when is_map(message) do
+  defp extract_error_message(%Extep{message: message, context: context}) when is_map(message) do
     case Map.to_list(message) do
-      [{_key, error_message}] -> {:error, error_message}
-      _ -> {:error, message}
+      [{_key, error_message}] -> {:error, {error_message, context}}
+      _ -> {:error, {message, context}}
     end
   end
 
-  defp extract_error_message(message), do: {:error, message}
+  defp extract_error_message(%Extep{message: message, context: context}) do
+    {:error, {message, context}}
+  end
 
   defp handle_message_key(fun, ctx_key) when is_function(fun) do
     info = Function.info(fun)

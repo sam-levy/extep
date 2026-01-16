@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0]
+
+### Added
+
+- Added `return_with_context/2` and `return_with_context/3` functions to return pipeline results along with context
+
+### Changed
+
+- Enhanced test suite with additional edge cases for error handling and context management
+
 ## [0.3.1]
 
 ### Changed
