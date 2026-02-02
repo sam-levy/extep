@@ -382,7 +382,7 @@ defmodule ExtepTest do
     end
   end
 
-  describe "return/2 for context key" do
+  describe "return/2 - for context key" do
     test "returns the value from the given context key as an ok tuple" do
       context = %{key: "value", another_key: "antother value"}
       extep = %Extep{status: :ok, context: context, message: nil}
@@ -390,10 +390,16 @@ defmodule ExtepTest do
       assert Extep.return(extep, :key) == {:ok, "value"}
     end
 
-    test "returns the halted value when `%Extep{}` status is `:halted`" do
+    test "returns the halted value when `%Extep{}` status is `:halted` with a tuple" do
       extep = %Extep{status: :halted, context: %{key: "value"}, message: {:ok, "halt message"}}
 
       assert Extep.return(extep, :key) == {:ok, "halt message"}
+    end
+
+    test "returns the halted value when `%Extep{}` status is `:halted` with string message" do
+      extep = %Extep{status: :halted, context: %{key: "value"}, message: "halt message"}
+
+      assert Extep.return(extep, :key) == {:no_status, "halt message"}
     end
 
     test "returns an unlabeled error tuple when the `%Extep{}` status is `:error` (default behavior)" do
@@ -423,17 +429,24 @@ defmodule ExtepTest do
     end
   end
 
-  describe "return/2 for function" do
+  describe "return/2 - for function" do
     test "returns the result of the given function" do
       extep = %Extep{status: :ok, context: %{key: "value"}, message: nil}
 
       assert Extep.return(extep, fn _context -> {:ok, "new value"} end) == {:ok, "new value"}
     end
 
-    test "returns the halted value when `%Extep{}` status is `:halted`" do
+    test "returns the halted value when `%Extep{}` status is `:halted` with a tuple" do
       extep = %Extep{status: :halted, context: %{key: "value"}, message: {:ok, "halt message"}}
 
       assert Extep.return(extep, fn _context -> {:ok, "new value"} end) == {:ok, "halt message"}
+    end
+
+    test "returns the halted value when `%Extep{}` status is `:halted` with string message" do
+      extep = %Extep{status: :halted, context: %{key: "value"}, message: "halt message"}
+
+      assert Extep.return(extep, fn _context -> {:ok, "new value"} end) ==
+               {:no_status, "halt message"}
     end
 
     test "returns an unlabeled error tuple when the `%Extep{}` status is `:error` (default behavior)" do
@@ -465,7 +478,7 @@ defmodule ExtepTest do
     end
   end
 
-  describe "return/3 with label_error option" do
+  describe "return/3 - with label_error option" do
     test "returns unlabeled error by default (label_error defaults to false)" do
       extep = %Extep{
         status: :error,
@@ -540,6 +553,13 @@ defmodule ExtepTest do
       assert Extep.return(extep, :key, label_error: false) == {:ok, "halt message"}
     end
 
+    test "halted status ignores label_error option with string message" do
+      extep = %Extep{status: :halted, context: %{key: "value"}, message: "halt message"}
+
+      assert Extep.return(extep, :key, label_error: true) == {:no_status, "halt message"}
+      assert Extep.return(extep, :key, label_error: false) == {:no_status, "halt message"}
+    end
+
     test "ok status ignores label_error option and returns context value" do
       extep = %Extep{status: :ok, context: %{key: "value"}, message: nil}
 
@@ -600,7 +620,287 @@ defmodule ExtepTest do
     end
   end
 
-  describe "integration tests" do
+  describe "return_with_context/3 - for context key" do
+    test "returns the value from the given context key as an ok tuple" do
+      context = %{key: "value", another_key: "antother value"}
+      extep = %Extep{status: :ok, context: context, message: nil}
+
+      assert Extep.return_with_context(extep, :key) == {:ok, {"value", context}}
+    end
+
+    test "returns the halted value when `%Extep{}` status is `:halted` with a tuple" do
+      extep = %Extep{status: :halted, context: %{key: "value"}, message: {:ok, "halt message"}}
+
+      assert Extep.return_with_context(extep, :key) == {:ok, {"halt message", extep.context}}
+    end
+
+    test "returns the halted value when `%Extep{}` status is `:halted` with string message" do
+      extep = %Extep{status: :halted, context: %{key: "value"}, message: "halt message"}
+
+      assert Extep.return_with_context(extep, :key) ==
+               {:no_status, {"halt message", extep.context}}
+    end
+
+    test "returns an unlabeled error tuple when the `%Extep{}` status is `:error` (default behavior)" do
+      extep = %Extep{
+        status: :error,
+        context: %{key: "value"},
+        message: %{some_key: "error message"}
+      }
+
+      assert Extep.return_with_context(extep, :key) == {:error, {"error message", extep.context}}
+    end
+
+    test "handles extep with pending tasks before returning value" do
+      extep =
+        %Extep{status: :ok, context: %{key: "value"}, tasks: [], message: nil}
+        |> Extep.async(:new_key, fn _context -> {:ok, "new value"} end)
+
+      assert {:ok, {"new value", context}} = Extep.return_with_context(extep, :new_key)
+      assert context.new_key == "new value"
+    end
+
+    test "handles error in tasks" do
+      extep =
+        %Extep{status: :ok, context: %{key: "value"}, tasks: [], message: nil}
+        |> Extep.async(:new_key, fn _context -> {:error, "error message"} end)
+
+      assert {:error, {"error message", context}} = Extep.return_with_context(extep, :key)
+      assert context == %{key: "value"}
+    end
+  end
+
+  describe "return_with_context/3 - for function" do
+    test "returns the result of the given function" do
+      extep = %Extep{status: :ok, context: %{key: "value"}, message: nil}
+
+      assert Extep.return_with_context(extep, fn _context -> {:ok, "new value"} end) ==
+               {:ok, {"new value", extep.context}}
+    end
+
+    test "returns the halted value when `%Extep{}` status is `:halted` with a tuple" do
+      extep = %Extep{status: :halted, context: %{key: "value"}, message: {:ok, "halt message"}}
+
+      assert Extep.return_with_context(extep, fn _context -> {:ok, "new value"} end) ==
+               {:ok, {"halt message", extep.context}}
+    end
+
+    test "returns the halted value when `%Extep{}` status is `:halted` with string message" do
+      extep = %Extep{status: :halted, context: %{key: "value"}, message: "halt message"}
+
+      assert Extep.return_with_context(extep, fn _context -> {:ok, "new value"} end) ==
+               {:no_status, {"halt message", extep.context}}
+    end
+
+    test "returns an unlabeled error tuple when the `%Extep{}` status is `:error` (default behavior)" do
+      extep = %Extep{
+        status: :error,
+        context: %{key: "value"},
+        message: %{some_key: "error message"}
+      }
+
+      assert Extep.return_with_context(extep, fn _context -> {:ok, "new value"} end) ==
+               {:error, {"error message", extep.context}}
+    end
+
+    test "handles extep with pending tasks before returning value" do
+      extep =
+        %Extep{status: :ok, context: %{}, tasks: [], message: nil}
+        |> Extep.async(:key, fn _context -> {:ok, "value"} end)
+
+      assert {:ok, {"new value", context}} =
+               Extep.return_with_context(extep, fn _context -> {:ok, "new value"} end)
+
+      assert context.key == "value"
+    end
+
+    test "handles error in tasks" do
+      extep =
+        %Extep{status: :ok, context: %{}, tasks: [], message: nil}
+        |> Extep.async(:key, fn _context -> {:error, "error message"} end)
+
+      assert {:error, {"error message", context}} =
+               Extep.return_with_context(extep, fn _context -> {:ok, "new value"} end)
+
+      assert context == %{}
+    end
+  end
+
+  describe "return_with_context/3 - with label_error option" do
+    test "returns unlabeled error by default (label_error defaults to false)" do
+      extep = %Extep{
+        status: :error,
+        context: %{key: "value"},
+        message: %{some_key: "error message"}
+      }
+
+      assert Extep.return_with_context(extep, :key) == {:error, {"error message", extep.context}}
+    end
+
+    test "returns unlabeled error when label_error: false (explicit)" do
+      extep = %Extep{
+        status: :error,
+        context: %{key: "value"},
+        message: %{some_key: "error message"}
+      }
+
+      assert Extep.return_with_context(extep, :key, label_error: false) ==
+               {:error, {"error message", extep.context}}
+    end
+
+    test "returns labeled error when label_error: true" do
+      extep = %Extep{
+        status: :error,
+        context: %{key: "value"},
+        message: %{some_key: "error message"}
+      }
+
+      assert Extep.return_with_context(extep, :key, label_error: true) ==
+               {:error, {%{some_key: "error message"}, extep.context}}
+    end
+
+    test "works with functions when label_error: false" do
+      extep = %Extep{
+        status: :error,
+        context: %{key: "value"},
+        message: %{some_key: "error message"}
+      }
+
+      assert Extep.return_with_context(extep, fn _ctx -> {:ok, "result"} end, label_error: false) ==
+               {:error, {"error message", extep.context}}
+    end
+
+    test "works with functions when label_error: true" do
+      extep = %Extep{
+        status: :error,
+        context: %{key: "value"},
+        message: %{some_key: "error message"}
+      }
+
+      assert Extep.return_with_context(extep, fn _ctx -> {:ok, "result"} end, label_error: true) ==
+               {:error, {%{some_key: "error message"}, extep.context}}
+    end
+
+    test "returns labeled error when a named function returns an error tuple and label_error: true" do
+      extep = %Extep{status: :ok, context: %{key: "value"}, message: nil}
+
+      assert Extep.return_with_context(extep, &return_error_tuple/1, label_error: true) ==
+               {:error, {%{return_error_tuple: "error message"}, extep.context}}
+    end
+
+    test "returns labeled error when an anonymous function returns an error tuple and label_error: true" do
+      extep = %Extep{status: :ok, context: %{key: "value"}, message: nil}
+
+      assert Extep.return_with_context(extep, fn _ctx -> {:error, "error message"} end,
+               label_error: true
+             ) ==
+               {:error, {%{no_label: "error message"}, extep.context}}
+    end
+
+    test "halted status ignores label_error option" do
+      extep = %Extep{status: :halted, context: %{key: "value"}, message: {:ok, "halt message"}}
+
+      assert Extep.return_with_context(extep, :key, label_error: true) ==
+               {:ok, {"halt message", extep.context}}
+
+      assert Extep.return_with_context(extep, :key, label_error: false) ==
+               {:ok, {"halt message", extep.context}}
+    end
+
+    test "halted status ignores label_error option with string message" do
+      extep = %Extep{status: :halted, context: %{key: "value"}, message: "halt message"}
+
+      assert Extep.return_with_context(extep, :key, label_error: true) ==
+               {:no_status, {"halt message", extep.context}}
+
+      assert Extep.return_with_context(extep, :key, label_error: false) ==
+               {:no_status, {"halt message", extep.context}}
+    end
+
+    test "ok status ignores label_error option and returns context value" do
+      extep = %Extep{status: :ok, context: %{key: "value"}, message: nil}
+
+      assert Extep.return_with_context(extep, :key, label_error: true) ==
+               {:ok, {"value", extep.context}}
+
+      assert Extep.return_with_context(extep, :key, label_error: false) ==
+               {:ok, {"value", extep.context}}
+    end
+
+    test "handles async task error with label_error: false for context key" do
+      extep =
+        %Extep{status: :ok, context: %{}, tasks: [], message: nil}
+        |> Extep.async(:key, fn _context -> {:error, "error message"} end)
+
+      assert {:error, {"error message", context}} =
+               Extep.return_with_context(extep, :key, label_error: false)
+
+      assert context == %{}
+    end
+
+    test "handles async task error with label_error: true for context key" do
+      extep =
+        %Extep{status: :ok, context: %{}, tasks: [], message: nil}
+        |> Extep.async(:key, fn _context -> {:error, "error message"} end)
+
+      assert {:error, {%{key: "error message"}, context}} =
+               Extep.return_with_context(extep, :key, label_error: true)
+
+      assert context == %{}
+    end
+
+    test "handles async task error with label_error: true for context key and step without key" do
+      extep =
+        %Extep{status: :ok, context: %{}, tasks: [], message: nil}
+        |> Extep.async(fn _context -> {:error, "error message"} end)
+
+      assert {:error, {%{no_label: "error message"}, context}} =
+               Extep.return_with_context(extep, :key, label_error: true)
+
+      assert context == %{}
+    end
+
+    test "handles async task error with label_error: false for function" do
+      extep =
+        %Extep{status: :ok, context: %{}, tasks: [], message: nil}
+        |> Extep.async(:key, fn _context -> {:error, "error message"} end)
+
+      assert {:error, {"error message", context}} =
+               Extep.return_with_context(extep, fn _context -> {:ok, "new value"} end,
+                 label_error: false
+               )
+
+      assert context == %{}
+    end
+
+    test "handles async task error with label_error: true for function" do
+      extep =
+        %Extep{status: :ok, context: %{}, tasks: [], message: nil}
+        |> Extep.async(:key, fn _context -> {:error, "error message"} end)
+
+      assert {:error, {%{key: "error message"}, context}} =
+               Extep.return_with_context(extep, fn _context -> {:ok, "new value"} end,
+                 label_error: true
+               )
+
+      assert context == %{}
+    end
+
+    test "handles async task error with label_error: true for function and step without key" do
+      extep =
+        %Extep{status: :ok, context: %{}, tasks: [], message: nil}
+        |> Extep.async(fn _context -> {:error, "error message"} end)
+
+      assert {:error, {%{no_label: "error message"}, context}} =
+               Extep.return_with_context(extep, fn _context -> {:ok, "new value"} end,
+                 label_error: true
+               )
+
+      assert context == %{}
+    end
+  end
+
+  describe "integration flows" do
     test "success" do
       params = %{user_id: 1, plan: "super-power-plus"}
 
@@ -664,6 +964,78 @@ defmodule ExtepTest do
         |> Extep.return(&create_subscription/1, label_error: true)
 
       assert return == {:error, %{fetch_user_failure: "user not found"}}
+    end
+
+    test "success with return_with_context" do
+      params = %{user_id: 1, plan: "super-power-plus"}
+
+      return =
+        Extep.new(%{params: params})
+        |> Extep.run(:params, &validate_params/1)
+        |> Extep.async(:user, &fetch_user/1)
+        |> Extep.async(:items, &fetch_items/1)
+        |> Extep.await()
+        |> Extep.async(fn %{user: _} -> :ok end)
+        |> Extep.async(:items_codes, fn %{items: items} -> {:ok, Enum.map(items, & &1.code)} end)
+        |> Extep.run(fn %{items_codes: _} -> :ok end)
+        |> Extep.async(fn _ -> :ok end)
+        |> Extep.async(:whatever, fn _ -> {:ok, "whatever"} end)
+        |> Extep.return_with_context(&create_subscription/1, label_error: true)
+
+      assert {:ok,
+              {%{
+                 id: 123,
+                 object: "subscription",
+                 user_id: 1,
+                 items: [%{code: "item1"}, %{code: "item2"}]
+               }, context}} = return
+
+      assert context.params == params
+      assert context.user == %{id: 1, name: "Alice"}
+      assert context.items == [%{code: "item1"}, %{code: "item2"}]
+    end
+
+    test "step failure with return_with_context" do
+      params = %{user_id: 1, plan: "super-power-plus"}
+
+      return =
+        Extep.new(%{params: params})
+        |> Extep.run(:params, &validate_params_failure/1)
+        |> Extep.async(:user, &fetch_user/1)
+        |> Extep.async(:items, &fetch_items/1)
+        |> Extep.return_with_context(&create_subscription/1, label_error: true)
+
+      assert {:error, {%{validate_params_failure: "invalid params"}, context}} = return
+      assert context.params == params
+    end
+
+    test "async step failure with return_with_context" do
+      params = %{user_id: 1, plan: "super-power-plus"}
+
+      return =
+        Extep.new(%{params: params})
+        |> Extep.run(:params, &validate_params/1)
+        |> Extep.async(:user, &fetch_user/1)
+        |> Extep.async(:items, &fetch_items_failure/1)
+        |> Extep.return_with_context(&create_subscription/1, label_error: true)
+
+      assert {:error, {%{fetch_items_failure: "items not found"}, context}} = return
+      assert context.params == params
+      assert context.user == %{id: 1, name: "Alice"}
+    end
+
+    test "multiple async steps failures with return_with_context" do
+      params = %{user_id: 1, plan: "super-power-plus"}
+
+      return =
+        Extep.new(%{params: params})
+        |> Extep.run(:params, &validate_params/1)
+        |> Extep.async(:user, &fetch_user_failure/1)
+        |> Extep.async(:items, &fetch_items_failure/1)
+        |> Extep.return_with_context(&create_subscription/1, label_error: true)
+
+      assert {:error, {%{fetch_user_failure: "user not found"}, context}} = return
+      assert context.params == params
     end
   end
 
